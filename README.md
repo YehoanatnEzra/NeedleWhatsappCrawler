@@ -1,13 +1,13 @@
 # 🧵 NeedleWhatsappCrawler
 
-A Node.js project using `@open-wa/wa-automate` to extract and analyze messages from WhatsApp groups.  
+A Node.js project using `@open-wa/wa-automate` to extract and analyze messages from WhatsApp groups.
 This tool is useful for academic data analysis, research, or social behavior insight based on exported chat data.
 
 ---
 
 ## 🚀 Features
 
-- Authenticates with your WhatsApp Web account
+- Authenticates with your WhatsApp Web account.
 - Crawls and loads full chat history from a target group
 - Enriches messages with metadata (author, replies, reactions)
 - Outputs:
