@@ -4,8 +4,11 @@ const fs = require('fs');
 
 // === CONFIG ===
 const TARGET_GROUP_NAME = 'ניידל קבוצת האלופים';
+const path = require('path');
+const EXPORT_DIR = 'exports';
+
+
 const MAX_MESSAGES = 1000;
-const OUTPUT_FILE = 'group_export.json';
 
 
 // ============================== MAIN ====================================
@@ -15,17 +18,20 @@ create().then(async client => {
         if (!group) return;
 
         const messages = await loadAllMessages(client, group.id, MAX_MESSAGES);
-        fs.writeFileSync('messages.json', JSON.stringify(messages, null, 2));
-        console.log(`✅ Dumped ${messages.length} raw messages to messages.json`);
-        const participants = await client.getGroupMembers(group.id);
-        // creating a dictionary of (id, name) for participants
-        const nameMap = createMemberNameMap(participants);
-        // const participantsInfo = buildParticipantInfo(participants, messages);
-        //
-        // participantsInfo.forEach((info, id) => {
-        //     console.log(`👤 Participant ID: ${id}, Name: ${info.name}, Phone: ${info.phone}`);
-        // });
 
+        // fs.writeFileSync('messages.json', JSON.stringify(messages, null, 2));
+        // console.log(`✅ Dumped ${messages.length} raw messages to messages.json`);
+
+        const participants = await client.getGroupMembers(group.id);
+
+        // Dump participants to stdout
+        participants.forEach(p => {
+            if (p.shortName === 'Jonathan'){
+                findPhoneAndName(p.id, messages);
+            }
+        });
+
+        const nameMap = createMemberNameMap(participants);
 
 
         const enriched = enrichMessages(messages, nameMap);
@@ -35,9 +41,10 @@ create().then(async client => {
             nameMap: Object.fromEntries(nameMap) // converts Map to plain object
         };
 
-        fs.writeFileSync(OUTPUT_FILE, JSON.stringify(exportData, null, 2));
-        console.log(`✅ Exported ${enriched.length} messages to ${OUTPUT_FILE}`);
-
+        const filename = sanitizeFilename(group.name) + '.json';
+        const outputPath = path.join(EXPORT_DIR, filename);
+        fs.writeFileSync(outputPath, JSON.stringify(exportData, null, 2));
+        console.log(`✅ Exported ${enriched.length} messages to ${outputPath}`);
 
         process.exit();
     } catch (error) {
@@ -51,6 +58,11 @@ create().then(async client => {
 
 
 // ============================== HELPERS ====================================
+
+
+function sanitizeFilename(name) {
+    return name.replace(/[\/\\?%*:|"<>]/g, '-');
+}
 
 function buildParticipantInfo(participants, messages) {
     const infoMap = new Map();
@@ -137,6 +149,16 @@ function createMemberNameMap(participants) {
     });
     return nameMap;
 }
+
+
+function findPhoneAndName(participantID, messages) {
+    // only messages that contain the participantID in the id field
+   const membersMessages = messages.filter(msg => msg.id.containss(participantID));
+   // export all relevant messages for this participant to file named "participantID.json"
+    fs.writeFileSync(`${participantID}.json`, JSON.stringify(membersMessages, null, 2));
+}
+
+
 
 
 
@@ -229,88 +251,103 @@ function formatReactionsForMessage(msg) {
     });
 }
 
+
 function enrichMessages(messages, nameMap) {
-    // sorting messages by timestamp
-    messages.sort((a, b) => a.timestamp - b.timestamp);
+    messages.sort(sortByTimestamp);
 
-    messages.forEach((msg, index) => {
-        if (msg.quotedMsg) {
-            const quotedParticpantid = msg.quotedParticipant.replace(/@.*/, '');
-            const name = nameMap.get(quotedParticpantid) || msg.quotedParticipant.replace(/@.*/, '');
-            console.log(`🔗 Message ${index + 1} is a reply to: ${name} with text: "${msg.quotedMsg.body || msg.quotedMsg.content || '[No text]'}"`);
-        }
-    });
+    const enriched = messages.map((msg, index) => enrichSingleMessage(msg, index, nameMap));
 
-
-
-    const enriched = messages.map((msg, index, arr) => {
-        // if (index > 200) {
-        //     console.log(JSON.stringify(msg, null, 2));
-        //     console.log("---------------------------------\n------------------------------");
-        // }
-
-        const text =(msg.isMedia)? "<Media Message (Truncated)>" : msg.body || msg.content || '[No text]';
-        // const text = msg.body?.trim() || msg.caption?.trim() || '[Media message]';
-
-        let replyTo = null;
-        if (msg.quotedMsg) {
-            const quotedParticpantid = msg.quotedParticipant.replace(/@.*/, '');
-            const name = nameMap.get(quotedParticpantid) || msg.quotedParticipant.replace(/@.*/, '');
-            replyTo = (!msg.quotedMsg)? null : `🔗 ${name} with text: "${msg.quotedMsg.body || msg.quotedMsg.content || '[No text]'}"`
-        }
-
-
-        let parsedId = parseMessageId(msg.id);
-
-        if (!parsedId.valid) {
-            console.log(`❌ Invalid message ID: ${msg.id} - Reason: ${parsedId.reason}`)
-        } else {
-            console.log(`✅ Message ID: ${parsedId.msgHashId} - Parsed as: ${JSON.stringify(parsedId)}`);
-        }
-
-
-
-        return {
-            id: (parsedId.valid) ? parsedId.msgHashId : msg.id,
-            SenderName:  hebrewifyIfNeeded((parsedId.valid) ? nameMap.get(parsedId.senderId) : msg.from),
-            SenderId: getReadableSenderId(msg),
-            timestamp: msg.timestamp,
-            body: text,
-            replyTo,
-            reactions: formatReactionsForMessage(msg)
-        };
-    });
-
-
-    // Filter invalid
-    const valid = enriched.filter(msg =>
-        typeof msg.timestamp === 'number' &&
-        !isNaN(msg.timestamp) &&
-        msg.timestamp > 0
-    );
-
-    valid.sort((a, b) => a.timestamp - b.timestamp);
-
-    valid.forEach((msg, index) => {
-        msg.msgNumber = index + 1;
-        msg.datetime = new Date(msg.timestamp * 1000).toISOString();
-        delete msg.timestamp;
-    });
-
-
-    return valid.map(msg => {
-        return {
-            serialNumber: msg.msgNumber,
-            datetime: msg.datetime,
-            messageId: msg.id,
-            SenderId: msg.SenderId,
-            SenderName: msg.SenderName,
-            body: msg.body,
-            replyTo: msg.replyTo,
-            reactions: msg.reactions
-        };
-    });
+    return enriched
+        .filter(isValidMessage)
+        .sort(sortByTimestamp)
+        .map(addFinalMetadata);
 }
+
+
+function sortByTimestamp(a, b) {
+    return a.timestamp - b.timestamp;
+}
+
+function enrichSingleMessage(msg, index, nameMap) {
+    const replyTo = buildReplyTo(msg, nameMap);
+
+    if (replyTo) {
+        console.log(`🔗 Message ${index + 1} is a reply to: ${replyTo}`);
+    }
+
+    const parsedId = parseMessageId(msg.id);
+
+    // if (!parsedId.valid) {
+    //     console.log(`❌ Invalid message ID: ${msg.id} - Reason: ${parsedId.reason}`);
+    // } else {
+    //     console.log(`✅ Message ID: ${parsedId.msgHashId} - Parsed as: ${JSON.stringify(parsedId)}`);
+    // }
+
+    return {
+        id: parsedId.valid ? parsedId.msgHashId : msg.id,
+        SenderId: getReadableSenderId(msg),
+        SenderName: hebrewifyIfNeeded(parsedId.valid ? getNameFromMap(nameMap, parsedId.senderId) : msg.from),
+        timestamp: msg.timestamp,
+        body: extractMessageBody(msg),
+        replyTo,
+        reactions: formatReactionsForMessage(msg)
+    };
+}
+
+function buildReplyTo(msg, nameMap) {
+    if (!msg.quotedMsg || !msg.quotedParticipant) return null;
+    const name = getNameFromMap(nameMap, msg.quotedParticipant);
+    const quotedText = msg.quotedMsg.body || msg.quotedMsg.content || "[No text]";
+    const authorId = msg.quotedMsg.id || msg.quotedParticipant || "Unknown ID";
+    const refId = msg.quotedStanzaID || "Unknown Message" +
+        " ID";
+    return {
+        ref : refId,
+        authorId: authorId,
+        authorName: name,
+        body: quotedText};
+    // return `🔗 ${name} with text: "${quotedText}"`;
+}
+
+function extractMessageBody(msg) {
+    return msg.isMedia
+        ? "<Media Message (Truncated)>"
+        : msg.body || msg.content || "[No text]";
+}
+
+function getNameFromMap(nameMap, rawId) {
+    const id = stripLid(rawId);
+    return nameMap.get(id) || id;
+}
+
+function stripLid(id) {
+    return id.replace(/@.*/, '');
+}
+
+function isValidMessage(msg) {
+    return typeof msg.timestamp === 'number' && msg.timestamp > 0;
+}
+
+function addFinalMetadata(msg, index) {
+    return {
+        serialNumber: index + 1,
+        datetime: formatTimestamp(msg.timestamp),
+        messageId: msg.id,
+        SenderId: msg.SenderId,
+        SenderName: msg.SenderName,
+        body: msg.body,
+        replyTo: msg.replyTo,
+        reactions: msg.reactions
+    };
+}
+
+function formatTimestamp(timestamp) {
+    return new Date(timestamp * 1000).toISOString();
+}
+
+
+
+
 
 
 /**

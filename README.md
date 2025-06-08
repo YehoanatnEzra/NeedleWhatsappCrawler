@@ -88,3 +88,5 @@ If your session gets stuck or cached unexpectedly, delete the `.wwebjs_auth` or 
 ## 📜 License
 
 MIT License – see `LICENSE` file for details.
+
+
