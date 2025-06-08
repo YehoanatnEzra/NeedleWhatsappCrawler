@@ -22,23 +22,16 @@ create().then(async client => {
         // fs.writeFileSync('messages.json', JSON.stringify(messages, null, 2));
         // console.log(`✅ Dumped ${messages.length} raw messages to messages.json`);
 
-        const participants = await client.getGroupMembers(group.id);
+        const members = extractUsersFromMessages(messages);
 
-        // Dump participants to stdout
-        participants.forEach(p => {
-            if (p.shortName === 'Jonathan'){
-                findPhoneAndName(p.id, messages);
-            }
-        });
-
-        const nameMap = createMemberNameMap(participants);
+        // const nameMap = createMemberNameMap(participants);
 
 
-        const enriched = enrichMessages(messages, nameMap);
+        const enriched = enrichMessages(messages, members);
 
         const exportData = {
             messages: enriched,
-            nameMap: Object.fromEntries(nameMap) // converts Map to plain object
+            nameMap: members
         };
 
         const filename = sanitizeFilename(group.name) + '.json';
@@ -106,14 +99,8 @@ function getReadableSenderId(msg) {
 
     // 2. Try to extract a phone number
     // const phoneMatch = rawId.match(/^(\d{8,15})@c\.us$/);
-    const cleanId = rawId.replace(/@.*/, ''); // Strip domain
+    return rawId.replace(/@.*/, ''); // Strip domain
 
-    // if the number starts with 972, replace it with 0
-    if (cleanId.startsWith('972')) {
-        return '0' + cleanId.slice(3); // Replace 972 with 0
-    }
-    // 3. If no phone number, return the raw ID
-    return cleanId;
 }
 function parseMessageId(messageId) {
     if (typeof messageId !== 'string') {
@@ -139,23 +126,75 @@ function parseMessageId(messageId) {
 }
 
 
-function createMemberNameMap(participants) {
-    const nameMap = new Map();
-    participants.forEach(p => {
-        const pushName = p.pushname || p.name || "Unknown Member";
-        // const phoneNumber =
-        const cleanId = p.id.replace(/@.*/, '');
-        nameMap.set(cleanId, hebrewifyIfNeeded(pushName));
+// function createMemberNameMap(participants) {
+//     const nameMap = new Map();
+//     participants.forEach(p => {
+//         const pushName = p.pushname || p.name || "Unknown Member";
+//         // const phoneNumber =
+//         const cleanId = p.id.replace(/@.*/, '');
+//         nameMap.set(cleanId, hebrewifyIfNeeded(pushName));
+//     });
+//     return nameMap;
+// }
+
+
+function extractUsersFromMessages(messages) {
+    const normalizePhone = (str) => {
+        if (!str) return null;
+        const match = str.match(/\+972\s?\d{1,2}[-\s]?\d{3}[-\s]?\d{4}/);
+        return match ? match[0].replace(/\D/g, '') : null;
+    };
+
+    const nameKey = ({ name = '', shortName = '', pushname = '' }) =>
+        `${name.trim()}|${shortName.trim()}|${pushname.trim()}`;
+
+    const userMap = new Map();
+
+    const handleSender = (sender) => {
+        if (!sender || typeof sender !== 'object' || !sender.id) return;
+
+        const [rawId, domain] = sender.id.split('@');
+        const lid = domain === 'lid' ? rawId : null;
+        const phone = domain === 'c.us' && rawId.startsWith('972') ? rawId : normalizePhone(sender.formattedName);
+        const pushname = sender.pushname || sender.formattedName || sender.name || '';
+
+        const key = nameKey(sender);
+        if (!userMap.has(key)) {
+            userMap.set(key, { lid, phone, pushname });
+        } else {
+            const entry = userMap.get(key);
+            if (!entry.lid) entry.lid = lid;
+            if (!entry.phone) entry.phone = phone;
+        }
+    };
+
+    messages.forEach(msg => {
+        handleSender(msg.sender);
+        if (msg.quotedMsg && msg.quotedMsg.sender) {
+            handleSender(msg.quotedMsg.sender);
+        }
     });
-    return nameMap;
+
+    return Array.from(userMap.values());
 }
 
+function getInfo(key, users) {
+    if (!key || !users || !Array.isArray(users)){
+        console.log('Invalid key or users array: ${key}, ${users}');
+        return null;
+    }
 
-function findPhoneAndName(participantID, messages) {
-    // only messages that contain the participantID in the id field
-   const membersMessages = messages.filter(msg => msg.id.containss(participantID));
-   // export all relevant messages for this participant to file named "participantID.json"
-    fs.writeFileSync(`${participantID}.json`, JSON.stringify(membersMessages, null, 2));
+    const normalizedKey = key.replace(/[^0-9]/g, ''); // strip non-digits if it's a phone number
+
+    const result =  users.find(user =>
+        user.lid === key || user.phone === key || user.phone === normalizedKey
+    ) || null;
+
+    if (!result) {
+        console.warn(`No info found for key: ${key}, users: ${JSON.stringify(users)}`);
+        return null;
+    }
+    return result;
 }
 
 
@@ -252,10 +291,10 @@ function formatReactionsForMessage(msg) {
 }
 
 
-function enrichMessages(messages, nameMap) {
+function enrichMessages(messages, members) {
     messages.sort(sortByTimestamp);
 
-    const enriched = messages.map((msg, index) => enrichSingleMessage(msg, index, nameMap));
+    const enriched = messages.map((msg, index) => enrichSingleMessage(msg, index, members));
 
     return enriched
         .filter(isValidMessage)
@@ -268,25 +307,19 @@ function sortByTimestamp(a, b) {
     return a.timestamp - b.timestamp;
 }
 
-function enrichSingleMessage(msg, index, nameMap) {
-    const replyTo = buildReplyTo(msg, nameMap);
-
-    if (replyTo) {
-        console.log(`🔗 Message ${index + 1} is a reply to: ${replyTo}`);
-    }
+function enrichSingleMessage(msg, index, members) {
+    const replyTo = buildReplyTo(msg, members);
 
     const parsedId = parseMessageId(msg.id);
+    const senderInfo = getInfo(getReadableSenderId(msg), members) || {lid: "Unknown Lid",phone: "Unknown Phone", pushname: "Unknown Name"};
 
-    // if (!parsedId.valid) {
-    //     console.log(`❌ Invalid message ID: ${msg.id} - Reason: ${parsedId.reason}`);
-    // } else {
-    //     console.log(`✅ Message ID: ${parsedId.msgHashId} - Parsed as: ${JSON.stringify(parsedId)}`);
-    // }
+
+
 
     return {
         id: parsedId.valid ? parsedId.msgHashId : msg.id,
-        SenderId: getReadableSenderId(msg),
-        SenderName: hebrewifyIfNeeded(parsedId.valid ? getNameFromMap(nameMap, parsedId.senderId) : msg.from),
+        SenderId: senderInfo.lid,
+        SenderName: senderInfo.pushname,
         timestamp: msg.timestamp,
         body: extractMessageBody(msg),
         replyTo,
@@ -294,19 +327,19 @@ function enrichSingleMessage(msg, index, nameMap) {
     };
 }
 
-function buildReplyTo(msg, nameMap) {
+function buildReplyTo(msg, members) {
     if (!msg.quotedMsg || !msg.quotedParticipant) return null;
-    const name = getNameFromMap(nameMap, msg.quotedParticipant);
+    const authorInfo = getInfo(stripLid(msg.quotedParticipant), members);
+    const authorName = authorInfo ? hebrewifyIfNeeded(authorInfo.name) : "Unknown" +
+        " Member";
+    const authorId = authorInfo ? authorInfo.lid || authorInfo.phone : "Unknown";
     const quotedText = msg.quotedMsg.body || msg.quotedMsg.content || "[No text]";
-    const authorId = msg.quotedMsg.id || msg.quotedParticipant || "Unknown ID";
-    const refId = msg.quotedStanzaID || "Unknown Message" +
-        " ID";
+    const refId = msg.quotedStanzaID || "Unknown Message ID";
     return {
         ref : refId,
         authorId: authorId,
-        authorName: name,
+        authorName: authorName,
         body: quotedText};
-    // return `🔗 ${name} with text: "${quotedText}"`;
 }
 
 function extractMessageBody(msg) {
