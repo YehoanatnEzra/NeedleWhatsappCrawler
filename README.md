@@ -2,7 +2,7 @@
 
 A collaborative Node.js project for extracting and enriching messages from WhatsApp groups using [`@open-wa/wa-automate`](https://github.com/open-wa/wa-automate-nodejs).
 
-This tool is designed for structured WhatsApp data collection and analysis within our academic course project.
+This tool is designed for structured WhatsApp data collection and analysis within our academic course project (מחט בערימת דאטה - 67978).
 
 > Project by Jonatan Vider, Yonatan Ezra, and Netanel Richey
 
