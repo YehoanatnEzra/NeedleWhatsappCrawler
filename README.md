@@ -61,7 +61,7 @@ On first run:
 - Scan the QR code with your phone
 - The script will:
   - Locate the group
-  - Crawl up to 1000 recent messages
+  - Crawl up to 5000 recent messages
   - Enrich the data
   - Save the output JSON file
 
